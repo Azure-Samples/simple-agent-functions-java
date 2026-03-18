@@ -168,20 +168,34 @@ This is that rewrite. The previous version had three short entries. This version
 
 | Metric | Value |
 |--------|-------|
-| **Files created** | 28 |
-| **Lines of code** | 2,144 |
+| **Files created** | 28 (then 1 major rewrite) |
+| **Lines of code** | ~2,300 |
 | **Build attempts** | 3 (2 failures, 1 success) |
 | **`func start` attempts** | 5 (4 failures, 1 success) |
+| **Azure deploys** | 4 (1 `azd up` + 3 `azd deploy` iterations) |
 | **Git push attempts** | 3 (2 auth failures, 1 success) |
-| **Builder prompts** | 4 |
+| **Builder prompts** | 5 |
 | **Squad agents activated** | Researcher, Architect, Coder, Tester, GitOps, DevRel, Scribe |
-| **Time from prompt to working agent** | ~50 minutes |
+| **Time from first prompt to live Azure endpoint** | ~80 minutes |
 
-### The Three Hardest Problems (None Were "Writing Code")
+### The Four Hardest Problems (None Were "Writing Code")
 
-1. **`PermissionHandler` package location** — The SDK puts it in `.json` sub-package. No docs mention this. Had to read the source.
-2. **Java Functions need staging directory** — `func start` from project root silently finds zero functions. You must run from `target/azure-functions/<appName>/`.
-3. **GitHub multi-account auth with SAML SSO** — Two accounts, one org, SAML enforcement. Required device flow re-auth.
+1. **copilot-sdk-java requires a CLI binary** — The SDK spawns `copilot` via `ProcessBuilder`. No bypass exists, even for BYOK. Azure Functions hosts don't have this binary. **Fix:** Dual-mode architecture — direct Azure OpenAI REST calls for deployment, SDK for local dev.
+2. **gpt-5-mini has a stricter API** — Rejects `max_tokens` (use `max_completion_tokens`) and non-default `temperature`. No error until you hit the live model. **Fix:** Stripped payload to only `messages` + `max_completion_tokens`. **Lesson: always test with your actual deployed model, not assumptions from older API docs.**
+3. **Java Functions need staging directory** — `func start` from project root silently finds zero functions. You must run from `target/azure-functions/<appName>/` where function.json and JARs are generated.
+4. **GitHub multi-account auth with SAML SSO** — Two accounts, one org, SAML enforcement. Required device flow re-auth.
+
+### Lessons Learned from Deployment
+
+> These are the things that **only became visible when testing against the real Azure endpoint.** Local testing with the Copilot SDK hid them all.
+
+| What Worked Locally | What Broke in Azure | Root Cause |
+|---------------------|---------------------|------------|
+| `CopilotClient` + `copilot` CLI | `Cannot run program "copilot"` | SDK is a CLI wrapper — binary not on Azure hosts |
+| `"max_tokens": 800` | `Unsupported parameter` | gpt-5-mini uses `max_completion_tokens` (newer API) |
+| `"temperature": 0.7` | `Unsupported value` | gpt-5-mini only accepts default temperature (1.0) |
+
+**The meta-lesson:** Local testing with the Copilot SDK exercised a completely different code path than Azure deployment. The SDK's authentication, model routing, and API compatibility are all abstracted away. When you deploy, you're talking to the raw Azure OpenAI REST API — and it has its own rules. **Test in Azure early.**
 
 ### Key Decisions (from `.squad/decisions.md`)
 
