@@ -186,15 +186,107 @@ This is that rewrite. The previous version had three short entries. This version
 ### Key Decisions (from `.squad/decisions.md`)
 
 - **D-002**: Azure Functions Java v4 + copilot-sdk-java 0.1.32 + azure-identity for BYOK
+- **D-003**: Dual-mode runtime — direct Azure OpenAI REST for deployment, Copilot SDK for local dev
 - One `CopilotClient` per request (simpler, matches sample purpose)
-- Plain `HttpURLConnection` for chat client (no extra deps)
+- Plain `HttpURLConnection` for chat client and Azure OpenAI calls (no extra deps)
 - Bicep infra reused from TS with only runtime changes
 
 ### What's Next
 
 - [ ] CI/CD GitHub Actions workflow
-- [ ] Deploy to Azure with `azd up`
+- [x] ~~Deploy to Azure with `azd up`~~ ✅ Done
 - [ ] Add streaming response support (SDK supports it via events)
+
+---
+
+## 2026-03-18 — Azure Deployment & Live Endpoint ✅
+
+> *"test deployment to azure and live endpoint"*
+
+### Phase 9: `azd up` — Provision + Deploy
+
+> **[Coder]** Deployed to Azure with `azd up`.
+
+| Step | What Happened | Level-Up 🆙 |
+|------|---------------|-------------|
+| `azd env new simple-agent-java` | Created environment targeting `eastus2` | — |
+| `azd up --no-prompt` | Provisioned 10 resources + deployed code in **3 minutes 32 seconds** | 🆙 **`azd up` packages Maven, provisions Bicep, and deploys in one command** |
+
+**Resources provisioned:**
+- Resource group: `rg-simple-agent-java`
+- Function App: `func-api-lamqva2iwng7a` (Flex Consumption, Java 17)
+- AI Foundry + AI Services: `agent-ai-serviceslamqva2iwng7a` with `gpt-5-mini` deployment
+- Storage, Log Analytics, App Insights, App Service Plan
+
+### Phase 10: The CLI Binary Problem
+
+> **[Coder]** First live test failed — and revealed a fundamental SDK limitation.
+
+```bash
+$ curl -X POST "https://func-api-lamqva2iwng7a.azurewebsites.net/api/ask?code=..." \
+    -d '{"message": "what are the three laws?"}'
+
+Error: java.io.IOException: Cannot run program "copilot": error=2, No such file or directory
+```
+
+**Root cause:** `copilot-sdk-java` ALWAYS spawns a `copilot` CLI binary as a subprocess (via `ProcessBuilder`). Even the BYOK/ProviderConfig path goes through the CLI. The binary doesn't exist on Azure Functions hosts.
+
+**Investigation:** Dispatched an explore agent to deep-dive the SDK source code:
+- `CliServerManager.java` lines 47-62: `new ProcessBuilder("copilot")` — no bypass
+- `CopilotClient.java` lines 175-190: external server mode exists but requires running CLI elsewhere
+- No environment variable, no config flag, no workaround
+
+🆙 **Level-Up: The copilot-sdk-java is a CLI wrapper, not an HTTP client.** For server-side deployments, you must call Azure OpenAI directly.
+
+### Phase 11: Dual-Mode Architecture
+
+> **[Architect → Coder]** Rewrote Ask.java to support two runtime paths.
+
+| Mode | When | How |
+|------|------|-----|
+| **Azure OpenAI direct** | `AZURE_OPENAI_ENDPOINT` is set (Azure deployment) | REST call to `/openai/deployments/{name}/chat/completions`, managed identity auth via `DefaultAzureCredential` |
+| **Copilot SDK** | No endpoint set (local dev with CLI) | `CopilotClient` → spawns `copilot` binary → uses GitHub auth |
+
+This is cleaner than the original — the Azure path uses raw `HttpURLConnection` with no SDK overhead. Zero extra dependencies.
+
+### Phase 12: gpt-5-mini Compatibility (Two More Iterations)
+
+> **[Coder]** The model API rejected parameters from the older API spec.
+
+| Deploy | Error | Fix |
+|--------|-------|-----|
+| 1st | `Unsupported parameter: 'max_tokens' is not supported` | Changed to `max_completion_tokens` |
+| 2nd | `Unsupported value: 'temperature' does not support 0.7` | Removed `temperature` — gpt-5-mini only accepts default (1.0) |
+| 3rd | ✅ **200 OK** | — |
+
+🆙 **Level-Up: gpt-5-mini has a stricter API than older models.** No custom `temperature`, and uses `max_completion_tokens` instead of `max_tokens`. Always test with your actual deployed model.
+
+### The Payoff: Live Agent on Azure
+
+```bash
+$ curl -X POST "https://func-api-lamqva2iwng7a.azurewebsites.net/api/ask?code=..." \
+    -H "Content-Type: application/json" \
+    -d '{"message": "what are the three laws of robotics?"}'
+
+Don't harm humans; obey; self-preserve.
+
+$ curl -X POST "..." -d '{"message": "Who is Isaac Asimov?"}'
+
+Prolific science-fiction author and biochemist
+```
+
+**Live endpoint:** `https://func-api-lamqva2iwng7a.azurewebsites.net/api/ask`
+**Auth:** Function key required (`?code=...`)
+**Model:** gpt-5-mini via Azure AI Services with managed identity
+
+### Updated Summary
+
+| Metric | Value |
+|--------|-------|
+| **Total deploys** | 4 (1 `azd up` + 3 `azd deploy` iterations) |
+| **Deploy cycle time** | ~1:17 per `azd deploy` |
+| **Iterations to live endpoint** | 3 (CLI binary → max_tokens → temperature) |
+| **Builder prompts total** | 5 |
 
 ---
 
