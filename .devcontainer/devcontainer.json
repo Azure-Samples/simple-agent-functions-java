@@ -1,0 +1,33 @@
+// For format details, see https://aka.ms/devcontainer.json.
+{
+	"name": "Functions Quickstarts Codespace - Java, aarch64 ready",
+	"dockerFile": "Dockerfile",
+	"features": {
+		"azure-cli": "latest"
+	},
+	"forwardPorts": [7071],
+	"portsAttributes": {
+		"7071": {
+			"label": "Azure Functions",
+			"onAutoForward": "notify"
+		}
+	},
+	"postCreateCommand": "bash -c 'echo \"export PROMPT_DIRTRIM=1\" >> ~/.bashrc || true; mkdir -p ~/.azurite || true; mvn clean package -DskipTests; cat .devcontainer/first-run-notice.txt || echo \"Setup completed\"'; npx azurite --location ~/.azurite --silent || true",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-azuretools.vscode-bicep",
+				"ms-azuretools.vscode-docker",
+				"ms-azuretools.vscode-azurefunctions",
+				"GitHub.copilot",
+				"humao.rest-client",
+				"vscjava.vscode-java-pack"
+			],
+			"settings": {
+				"azureFunctions.showProjectWarning": false
+			}
+		}
+	},
+	"remoteUser": "vscode",
+	"shutdownAction": "stopContainer"
+}
